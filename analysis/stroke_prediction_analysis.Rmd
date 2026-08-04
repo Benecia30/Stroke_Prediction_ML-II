@@ -54,7 +54,7 @@ https://www.kaggle.com/datasets/fedesoriano/stroke-prediction-dataset
 **Read the Data File:**
 
 ```{r}
-data <- read.csv("healthcare-dataset-stroke-data.csv")
+data <- read.csv("../data/healthcare-dataset-stroke-data.csv")
 head(data)
 ```
 
@@ -107,7 +107,7 @@ text(
 ```{r}
 colSums(is.na(data)) # check for missing values for each column
 ```
-**Observation**: There are no missing Values in any of the variable"
+**Observation**: There are no missing Values in any of the variable
 
 **Check unique value for all categorical columns**
 
