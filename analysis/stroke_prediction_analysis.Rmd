@@ -1,0 +1,1381 @@
+---
+title: "ML_Project_Group_O"
+author: "Group_O_Stroke"
+date: "2025-12-23"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE,
+  warning = FALSE
+)
+
+library(caret)
+library(pROC)
+library(dplyr)
+library(e1071)
+library(iml)
+library(glmnet)
+library(MASS)
+library(DALEX)
+library(DALEXtra)
+library(localModel)
+library(gridExtra)
+
+```
+
+### Introduction
+For this project, we use  **Stroke Prediction Data set**  obtained from Kaggle.
+The data set is designed for a binary classification task where the goal
+is to predict whether a patient is likely to experience a stroke
+based on demographic, lifestyle and medical attributes.
+
+**Data set source:**  
+https://www.kaggle.com/datasets/fedesoriano/stroke-prediction-dataset
+
+#### Variables
+
+- **gender** (nominal): Gender of the patient  
+- **age** (continuous): Age in years  
+- **hypertension** (binary): Presence of hypertension (0 = No, 1 = Yes)  
+- **heart_disease** (binary): Presence of heart disease (0 = No, 1 = Yes)  
+- **ever_married** (nominal): Marital status  
+- **work_type** (nominal): Type of employment  
+- **Residence_type** (nominal): Type of residence (Urban/Rural)  
+- **avg_glucose_level** (continuous): Average blood glucose level  
+- **bmi** (continuous): Body Mass Index  
+- **smoking_status** (nominal): Smoking behavior  
+- **stroke** (binary target): Stroke occurrence (0 = No, 1 = Yes)
+
+
+### Descriptive Analysis
+**Read the Data File:**
+
+```{r}
+data <- read.csv("healthcare-dataset-stroke-data.csv")
+head(data)
+```
+
+**Structure and Summary of the Data File:**
+
+```{r}
+dim(data) # define no. of Columns and Rows
+str(data) # tells about structure of data(data type, variable names, data type of each variable and few values for each variable )
+names(data) # tells about column names
+summary(data) # provides descriptive summary statistics for each variable in the data set.
+```
+
+```{r}
+# Reset layout
+par(mfrow = c(1,1))
+par(mar = c(5,5,4,2))
+
+# Class counts → percentages
+class_counts <- table(data$stroke)
+class_percent <- 100 * class_counts / sum(class_counts)
+
+# Barplot
+bp <- barplot(
+  class_percent,
+  col = c("steelblue", "tomato"),
+  xlab = "Class",
+  ylab = "Percentage (%)",
+  names.arg = c("No Stroke", "Stroke"),
+  ylim = c(0, 100),
+  cex.names = 1,
+  cex.lab = 1.2,
+  cex.main = 1.2
+)
+
+# Add percentage labels
+text(
+  x = bp,
+  y = class_percent,
+  labels = paste0(round(class_percent, 2), "%"),
+  pos = 3,
+  cex = 1
+)
+
+```
+
+**Observation:** The stroke data set contains information about 5110 patients. It includes both numerical values (such as age and glucose level) and categorical information (such as gender and smoking status). This data set shows that we need to handle categorical values using hot encoding. Also by looking at stroke information, it shows that patients experienced a stroke—less than 5% of the total records. Because stroke cases are so rare compared to non-stroke cases, this creates an imbalance in the data.
+
+**Check for Missing Values**
+
+```{r}
+colSums(is.na(data)) # check for missing values for each column
+```
+**Observation**: There are no missing Values in any of the variable"
+
+**Check unique value for all categorical columns**
+
+```{r}
+cat_vars <- c("gender", "ever_married", "work_type",
+              "Residence_type", "smoking_status", "bmi")
+
+lapply(data[cat_vars], function(x) unique(x))
+```
+**Observation**: Categorical variables show valid and consistent categories with minimal missing values. Only bmi requires pre processing due to the presence of missing data(bmi has N/A value). Also bmi column need data conversion from char to numeric data type. 
+
+**Check for all columns for total number of Not applicable**
+
+```{r}
+sapply(data, function(x) sum(x %in% c("N/A", "NA", "n/a", "Not Available")))
+
+```
+**Observation**: The data set was checked for missing values recorded as text such as “N/A” and we found that bmi has 201 N/A values. 
+
+**Check for duplicate records**
+```{r}
+any(duplicated(data))
+```
+**Observation** There are no duplicate records
+
+**Statistics (age attribute)**
+
+```{r}
+summary(data$age) # summary for age attribute
+boxplot(data$age ~ data$stroke, data = data, 
+        main="Age vs Stroke Occurrence", 
+        xlab="Stroke (0=No, 1=Yes)", ylab="Age",
+        col=c("green", "red")) # This shows: Are the 'stroke' patients significantly older?
+
+# Group-wise (within stroke group outliers)
+out_age_0 <- boxplot.stats(data$age[data$stroke == 0])$out
+length(out_age_0)
+out_age_1 <- boxplot.stats(data$age[data$stroke == 1])$out
+length(out_age_1)
+Total_age <- length(out_age_0)+length(out_age_1)
+print(paste("Total Outliers:", Total_age))
+
+# Global Outliers (whole dataset)
+outliers <- boxplot.stats(data$age)$out
+print(paste("Total Outliers:", length(outliers)))
+```
+
+**Observation**:
+The data set contains individuals ranging from child (0.08 years(1 month)) to seniors (82 years).
+While the group's average age is 43, the data clearly shows that strokes mostly happen to much older people (around age 70) compared to those who are healthy (around age 43).
+
+**Statistics (Glucose attribute)**
+
+```{r}
+summary(data$avg_glucose_level) # summary for avg_glucose_level attribute
+boxplot(data$avg_glucose_level ~ data$stroke, data = data, 
+        main="avg_glucose_level vs Stroke Occurrence", 
+        xlab="Stroke (0=No, 1=Yes)", ylab="Glucose level",
+        col=c("green", "red")) # This shows: Are the 'stroke' patients significantly high glucose level?
+
+#Global outliers
+outliers <- boxplot.stats(data$avg_glucose_level)$out
+print(paste("Total Outliers:", length(outliers)))
+```
+
+**Observation**:
+According to analysis shows that while most people have healthy glucose levels (around 92), those who suffered a stroke often have much higher sugar levels, with some reaching as high as 271, suggesting that high blood sugar is a key warning sign in our data.
+
+Glucose is **"unpredictable"** due to overlap.
+
+
+**Statistics (BMI attribute)**
+
+```{r}
+summary(data$bmi) # summary for bmi attribute
+data$bmi <- as.numeric(data$bmi)
+boxplot(data$bmi ~ data$stroke, data = data, 
+        main="BMI vs Stroke Occurrence", 
+        xlab="Stroke (0=No, 1=Yes)", ylab="BMI",
+        col=c("green", "red")) # This shows: Are the 'stroke' influence by the bmi?
+
+#Global outliers
+outliers <- boxplot.stats(data$bmi)$out
+print(paste("Total Outliers:", length(outliers)))
+```
+
+**Observation**:
+
+Most people are in the "Overweight" category (25 to 30 BMI).
+BMI is the weakest predictor—weight alone doesn't tell us if someone will have a stroke as clearly as Age does.
+BMI is a highly unpredictable attribute in this data set. Unlike Age, which shows a clear difference between groups
+Weight is non deciding factor who had a stroke because the median for 0 (No stroke) and median for 1 (stroke) difference is very small, shows weak correlation.
+
+
+**Healthy**: 18.5 to 24.9.
+**Overweight**: 25.0 to 29.9 (Your Median of 28.1 sits right here).
+**Obese**: 30.0 or higher.
+
+**Overall Summary**
+
+***Outliers***
+
+**Variable**:Age 
+
+**Outlier Count**: 2 
+
+**Remove**:NO, These are rare cases of young people having strokes. We need to keep them so the Model knows young people are at risk too. 
+
+
+**Variable**:Glucose	
+
+**Outlier Count**: 627 
+
+**Remove**:NO, Almost all outliers are in the "No Stroke" group. Keeping them shows that high sugar is a risk, but it doesn't always cause a stroke.
+
+
+
+**Variable**:BMI
+
+**Outlier Count**: 110 
+
+**Remove**:NO, Most are non Stroke people with high weight. Removing them won't change my results because the "Stroke" and "No Stroke" groups already look almost identical.
+
+
+**Shape of the Numeric Data**
+
+```{r}
+# Shape of the data
+par(mfrow=c(1,3)) # This puts 3 graphs in one row
+
+# 1. Histogram for Age
+hist(data$age, prob=TRUE, main="Age Distribution", col="skyblue", xlab="Age")
+lines(density(data$age), col="red", lwd=2) # Adds the curve
+
+# 2. Histogram for Glucose
+hist(data$avg_glucose_level, prob=TRUE, main="Glucose Distribution", col="gold", xlab="Glucose")
+lines(density(data$avg_glucose_level), col="red", lwd=2)
+
+# 3. Histogram for BMI 
+# it has many NA value needs to be replaced with mean or median than the result might be change.
+hist(data$bmi, prob=TRUE, main="BMI Distribution", col="lightgreen", xlab="BMI")
+lines(density(data$bmi, na.rm=TRUE), col="red", lwd=2)
+
+
+```
+
+**Observation**
+
+**Age**: The distribution is balanced (Symmetric) because the Mean (43) and Median (45) are almost the same. This creates a centered, even "hill" shape.
+
+**Glucose**: This data is right-skewed because the Mean (106) is much higher than the Median (91). The few people with very high sugar "stretch" the graph out to the right.
+
+**BMI:** This data is also right-skewed because the Mean is higher than the Median. Like Glucose, the extreme high weights pull the "tail" of the graph toward the right side.
+**Distribution of Categorical Variables**
+
+```{r}
+
+# 1. Smoking Status 
+table(data$smoking_status, data$stroke)
+
+# 2. Work Type 
+table(data$work_type, data$stroke)
+
+# 3. Residence Type
+table(data$Residence_type, data$stroke)
+
+# 4. Gender
+table(data$gender, data$stroke)
+
+```
+**Observation**: 
+
+**Smoking**: Smoking history increases stroke frequency.
+
+**Work Type**: Stroke occurrence is highest among **Private and Self-employed workers**. Conversely, strokes are nearly non-existent in the 'Children' and 'Never Worked' categories, likely due to their younger age.
+
+**Residence Type**: Here I see almost identical results, both have nearly same stroke rate.
+
+**Gender** : The Stroke rate is almost same in both the genders.
+
+**Result**: Work Type has high impact on stroke as compared to other attributes.
+
+
+```{r}
+# Distribution of Categorical variable via bar plot
+
+
+par(mfrow=c(3,2))
+
+# 1. Gender Bar Plot
+barplot(table(data$gender), col="coral", main="Gender Count", ylab="Frequency")
+
+# 2. Work Type Bar Plot (Check for Imbalance)
+barplot(table(data$work_type), col="lightblue", main="Work Type Count", las=2)
+
+# 3. Smoking Status (Look for the "Unknown" bar)
+barplot(table(data$smoking_status), col="lightgreen", main="Smoking Status", las=2)
+
+# 4. Residence Type
+barplot(table(data$Residence_type), col="plum", main="Residence Type")
+```
+
+**Observation**
+
+I can see the data set is **predominantly female**, with fewer males and almost no representation for the 'Other' category. **Work Type** is highly **imbalanced**, as most people work in the Private sector. In contrast, **Residence Type** is evenly distributed between Rural and Urban areas. Finally, **Smoking Status** has a lot of 'Unknown' entries (nearly 1,500) which carry some information required for modeling, though 'Never Smoked' is the most common known group.
+
+**Correlation Among Attributes**
+
+```{r}
+pairs(data[, c("age", "bmi", "avg_glucose_level")],
+      main = "Scatterplot Matrix")
+cor(data[, c("age", "bmi", "avg_glucose_level")],
+    method = "spearman")
+
+```
+
+**Observation**: The scatter plot matrix shows no strong linear relationship among age, BMI, and average glucose level. BMI appears largely independent of age and glucose, while age shows a weak positive association with average glucose level
+
+
+### Data Pre-Processing Steps
+
+*Convert data type of bmi from character to int*
+```{r}
+data$bmi <- as.numeric(data$bmi)
+class(data$bmi)
+
+```
+
+*Handle missing values*
+
+```{r}
+sum(is.na(data$bmi)) # check total number of missing value for bmi
+median_bmi <- median(data$bmi, na.rm = TRUE) # calculate median BMI ignoring missing values
+data$bmi[is.na(data$bmi)] <- median_bmi # update with median value for NA
+
+```
+
+**Conclusion** As BMI is right-skewed as see above where most values are between 18–40 and extreme high values (some > 60, even close to 100) and these can be due to data entry error or rare medical cases so replacing with median to avoid loss of data and reduce the impact of outliers.
+
+**One Hot Encoding**
+
+```{r}
+#Convert categorical variables to factors
+data$gender <- as.factor(data$gender) 
+data$ever_married <- as.factor(data$ever_married)
+data$work_type <- as.factor(data$work_type)
+data$Residence_type <- as.factor(data$Residence_type)
+data$smoking_status <- as.factor(data$smoking_status)
+data$stroke <- factor(
+  data$stroke,
+  levels = c(0, 1),
+  labels = c("NoStroke", "Stroke")
+)
+
+
+#Apply One-hot encode to all categorical variables
+encoded_data<-model.matrix(~ . - stroke - id, data = data)[, -1] #'stroke' and The identifier 'id'(to prevent data leakage) are excluded from encoding and model.matrix  converts 
+
+#factor variables into dummy variables
+encoded_data <- as.data.frame(encoded_data) #Convert to data frame
+encoded_data$stroke <- data$stroke #Add target back
+names(encoded_data) <- make.names(names(encoded_data)) # removes special characters and spaces
+str(encoded_data) # Check data type of all variables
+head(encoded_data) # get first few rows of the encoded data
+
+
+```
+
+**Conclusion** Categorical variables were transformed using one-hot encoding to convert them into binary features suitable for modeling.
+
+### Apply Machine Learning Models 
+
+```{r}
+# Create training, validation and test data set with 60-20-20 split
+set.seed(4)
+train_index <- createDataPartition(encoded_data$stroke, p = 0.6, list = FALSE) # applying Stratified sampling to have same proportion of stroke and Non-stroke cases in both training and test set
+train_data <- encoded_data[train_index, ] # create training data set using 60% of data
+temp_data <- encoded_data[-train_index, ] # create temporary data set using 40 %  of data which we are going to divide further into validation and test data set
+
+val_index <- createDataPartition(
+  temp_data$stroke,
+  p = 0.5,
+  list = FALSE
+)
+
+validation_data <- temp_data[val_index, ] # Create validation data set(20%)
+test_data <- temp_data[-val_index, ] # create test data set(20%)
+
+```
+
+#### Model 1- SVM
+
+```{r}
+#calculate Class Weight to handle class imbalance
+class_counts <- table(train_data$stroke) # check class distribution of the target variable (stroke) which helps to identify class imbalance
+class_wts <- sum(class_counts) / class_counts # Calculate class weights to handle class imbalance and minority classes receive higher weights to penalize misclassification more strongly
+class_wts <- as.numeric(class_wts) #Convert weights to numeric format
+names(class_wts) <- levels(train_data$stroke) #Assign class labels to the corresponding weights
+```
+
+```{r, echo=FALSE}
+# =========================================================
+# MODEL: Linear SVM (2 Features)
+# PURPOSE: Baseline model using Age and Glucose
+# =========================================================
+
+#Train a Linear Support Vector Machine using selected features
+linearSVM_02 <- svm(
+  stroke ~ age + avg_glucose_level,
+  data = train_data,
+  kernel = "linear",
+  scale = TRUE,
+  cost = 0.1, # controls the margin–misclassification trade-off
+  class.weights = class_wts,
+  tolerance = 0.01 # to avoid warning
+)
+
+# visualization
+plot(linearSVM_02, train_data, age ~ avg_glucose_level, main = "age ~ avg_glucose_level")
+
+# predictions
+ypred_train <- predict(linearSVM_02, newdata = train_data)
+
+# confusion matrix
+table(ypred_train, train_data$stroke)
+
+# accuracy
+mean(ypred_train == train_data$stroke)
+
+#Predictions on validation data set
+ypred_test <- predict(linearSVM_02, newdata = validation_data)
+table(ypred_test, validation_data$stroke)
+mean(ypred_test == validation_data$stroke)
+
+# ROC & AUC 
+decision_vals <- attributes(
+  predict(linearSVM_02, validation_data, decision.values = TRUE) # Obtain decision values from the trained SVM model on the validation set as Decision values represent the signed distance to the separating hyperplane.
+)$decision.values
+
+roc_obj <- roc(validation_data$stroke, decision_vals) # Compute the ROC curve which evaluates the trade-off between sensitivity (true positive rate) and specificity (false positive rate) across different thresholds
+
+plot(roc_obj, main = "ROC – Linear SVM (2 features)")
+auc(roc_obj) # calculate the Area Under the ROC Curve (AUC) as it summarizes the model’s ability to distinguish between stroke and non-stroke cases
+```
+
+**Observation**: Linear SVM (2 Features: Age & Glucose)
+This model uses only age and average glucose level and provides a strong baseline. It achieves an accuracy of 71.8%, a sensitivity of 0.90, and an AUC of 0.874, showing that these two features are powerful predictors of stroke. Although its specificity is lower (0.709), the high sensitivity makes it effective at detecting most stroke cases.
+
+```{r, echo=FALSE}
+# =========================================================
+# MODEL: Linear SVM (4 Features)
+# PURPOSE: using Age, Glucose, bmi and hypertension
+# =========================================================
+linearSVM_04 <- svm(
+  stroke ~ age + avg_glucose_level + bmi + hypertension,
+  data = train_data,
+  kernel = "linear",
+  scale = TRUE,
+  cost = 0.1,
+  class.weights = class_wts,
+  tolerance = 0.01
+)
+
+# predictions
+ypred_train <- predict(linearSVM_04, newdata = train_data)
+
+# confusion matrix
+table(ypred_train, train_data$stroke)
+
+# accuracy
+mean(ypred_train == train_data$stroke)
+
+#Predictions on validation set
+ypred_test <- predict(linearSVM_04, newdata = validation_data)
+table(ypred_test, validation_data$stroke)
+mean(ypred_test == validation_data$stroke)
+
+#ROC & AUC 
+decision_vals <- attributes(
+  predict(linearSVM_04, validation_data, decision.values = TRUE)
+)$decision.values
+
+roc_obj <- roc(validation_data$stroke, decision_vals)
+plot(roc_obj, main = "ROC – Linear SVM (4 features)")
+auc(roc_obj)
+```
+
+**Observation**: Linear SVM (4 Features)
+Adding BMI and hypertension slightly improves the model’s ability to detect stroke patients. The model achieves an accuracy of 71.1%, sensitivity of 0.94, and AUC of 0.872. While overall accuracy remains similar, the higher sensitivity indicates better detection of high-risk patients without sacrificing model stability.
+
+```{r, echo=FALSE}
+# =========================================================
+# MODEL: Linear SVM (All Features)
+# =========================================================
+predictor_features <- setdiff(names(encoded_data), c("stroke")) # Automatically construct a model formula using all predictor variables while excluding the target (stroke) 
+features_all <- as.formula(
+  paste("stroke ~", paste(predictor_features, collapse = " + "))
+)
+linearSVM_all <- svm(
+  features_all,
+  data = train_data,
+  kernel = "linear",
+  scale = TRUE,
+  cost = 0.1,
+  class.weights = class_wts,
+  tolerance = 0.01
+)
+
+# predictions
+ypred_train <- predict(linearSVM_all, newdata = train_data)
+
+# confusion matrix
+table(ypred_train, train_data$stroke)
+
+# accuracy
+mean(ypred_train == train_data$stroke)
+
+#Predictions on TEST
+ypred_test <- predict(linearSVM_all, newdata = validation_data)
+table(ypred_test, validation_data$stroke)
+mean(ypred_test == validation_data$stroke)
+
+#ROC & AUC 
+decision_vals <- attributes(
+  predict(linearSVM_all, validation_data, decision.values = TRUE)
+)$decision.values
+
+roc_obj <- roc(validation_data$stroke, decision_vals)
+plot(roc_obj, main = "ROC – Linear SVM (all features)")
+auc(roc_obj)
+```
+**Observation**: Linear SVM (All Features)
+Using all available features results in a well-balanced model with an accuracy of 70.8%, sensitivity of 0.94, and AUC of 0.869. The model consistently identifies most stroke cases while maintaining reasonable specificity (0.697). This makes it suitable for medical screening where missing a stroke is costly.
+
+```{r, echo=FALSE}
+# =========================================================
+# MODEL: Linear SVM (All Features) with Cross Validation
+# =========================================================
+cost_grid <- c(0.001, 0.01, 0.1, 0.5, 1, 5, 10, 50) # Define a grid of cost values to explore different regularization strengths during hyperparameter tuning
+cv_control <- tune.control(sampling = "cross", cross = 5) # Configure 5-fold cross-validation to select the optimal cost parameter and improve generalization
+tune_linear_all <- tune(
+  svm,
+  features_all,
+  data = train_data,
+  kernel = "linear",
+  scale = TRUE,
+  class.weights = class_wts,
+  ranges = list(cost = cost_grid),
+  tunecontrol = cv_control,
+  tolerance = 0.01
+
+)
+#Extract best model
+tunelinearSVM_all <- tune_linear_all$best.model
+summary(tunelinearSVM_all)
+
+#Predictions on TRAIN
+ypred_train <- predict(tunelinearSVM_all, newdata = train_data)
+table(ypred_train, train_data$stroke)
+mean(ypred_train == train_data$stroke)
+
+#Predictions on TEST
+ypred_test <- predict(tunelinearSVM_all, newdata = validation_data)
+table(ypred_test, validation_data$stroke)
+mean(ypred_test == validation_data$stroke)
+
+#ROC & AUC
+decision_vals <- attributes(
+  predict(tunelinearSVM_all, validation_data, decision.values = TRUE)
+)$decision.values
+
+roc_obj <- roc(validation_data$stroke, decision_vals)
+plot(roc_obj, main = "ROC – Linear SVM (All features, CV)")
+auc(roc_obj)
+```
+**Observation**: Linear SVM (All Features + CV)
+Applying cross-validation improves the robustness of the model. It achieves an accuracy of 71.3%, sensitivity of 0.94, specificity of 0.702, and an AUC of 0.868. Although the AUC is slightly lower than simpler models, this version offers the most reliable and generalizable performance on unseen data.
+
+```{r, echo=FALSE}
+# =========================================================
+# MODEL: Radial SVM (All Features) 
+# =========================================================
+
+radialSVM_all <- svm(
+  features_all,
+  data = train_data,
+  kernel = "radial",
+  scale = TRUE,
+  cost = 0.1,
+  class.weights = class_wts,
+  tolerance = 0.01
+)
+
+# predictions
+ypred_train <- predict(radialSVM_all, newdata = train_data)
+
+# confusion matrix
+table(ypred_train, train_data$stroke)
+
+# accuracy
+mean(ypred_train == train_data$stroke)
+
+#Predictions on TEST
+ypred_test <- predict(radialSVM_all, newdata = validation_data)
+table(ypred_test, validation_data$stroke)
+mean(ypred_test == validation_data$stroke)
+
+#ROC & AUC 
+decision_vals <- attributes(
+  predict(radialSVM_all, validation_data, decision.values = TRUE)
+)$decision.values
+
+roc_obj <- roc(validation_data$stroke, decision_vals)
+plot(roc_obj, main = "ROC – radial SVM (all features)")
+auc(roc_obj)
+```
+**Observation**: Radial SVM (All Features)
+The radial kernel model shows an accuracy of 72.8%, sensitivity of 0.88, and an AUC of 0.845. While it performs reasonably well, it does not outperform the linear models in detecting stroke cases and has lower overall discrimination ability.
+
+```{r, echo=FALSE}
+# =========================================================
+# MODEL: Radial SVM (All Features) with cross validation
+# =========================================================
+cost_grid <- c(0.001, 0.01, 0.1, 0.5, 1, 5, 10, 50)
+cv_control <- tune.control(sampling = "cross", cross = 5)
+tune_radial_all <- tune(
+  svm,
+  features_all,
+  data = train_data,
+  kernel = "radial",
+  scale = TRUE,
+  class.weights = class_wts,
+  ranges = list(cost = cost_grid),
+  tunecontrol = cv_control,
+  tolerance = 0.01
+)
+#Extract best model
+tune_radialSVM_all <- tune_radial_all$best.model
+summary(tune_radialSVM_all)
+
+#Predictions on TRAIN
+ypred_train <- predict(tune_radialSVM_all, newdata = train_data)
+table(ypred_train, train_data$stroke)
+mean(ypred_train == train_data$stroke)
+
+#Predictions on TEST
+ypred_test <- predict(tune_radialSVM_all, newdata = validation_data)
+table(ypred_test, validation_data$stroke)
+mean(ypred_test == validation_data$stroke)
+
+#ROC & AUC
+decision_vals <- attributes(
+  predict(tune_radialSVM_all, validation_data, decision.values = TRUE)
+)$decision.values
+
+roc_obj <- roc(validation_data$stroke, decision_vals)
+plot(roc_obj, main = "ROC – radial SVM (All features, CV)")
+auc(roc_obj)
+```
+
+**Observation**: Radial SVM (All Features + CV)
+This model reports the highest accuracy of 84.1% and specificity of 0.871, but its sensitivity drops sharply to 0.24 and AUC to 0.700. This means it correctly predicts non-stroke cases but misses most actual stroke patients, making it unsafe for medical use despite its high accuracy.
+
+**All SVM Model Comparison**
+
+```{r}
+# =========================================================
+# Compute metrics for all SVM Models
+# =========================================================
+get_metrics <- function(model, model_name) {
+  
+  # 1. Generate predictions
+  ypred <- predict(model, newdata = validation_data)
+  
+  # This prevents N/A when the model predicts only one class
+  cm <- table(factor(ypred, levels = c("NoStroke", "Stroke")), 
+              factor(validation_data$stroke, levels = c("NoStroke", "Stroke")))
+  
+  # 2. Accuracy
+  acc <- mean(ypred == validation_data$stroke)
+  
+  # 3. Sensitivity (Recall)
+  total_actual_strokes <- sum(validation_data$stroke == "Stroke")
+  sensitivity <- cm["Stroke", "Stroke"] / total_actual_strokes
+  
+  # 4. Specificity
+  total_actual_healthy <- sum(validation_data$stroke == "NoStroke")
+  specificity <- cm["NoStroke", "NoStroke"] / total_actual_healthy
+  
+  # 5. ROC & AUC 
+  decision_vals <- attributes(
+    predict(model, validation_data, decision.values = TRUE)
+  )$decision.values
+  
+  roc_obj <- pROC::roc(validation_data$stroke, as.numeric(decision_vals), 
+                       levels = c("NoStroke", "Stroke"), direction = "<")
+  
+  data.frame(
+    Model = model_name,
+    Accuracy = round(acc, 3),
+    Sensitivity = round(sensitivity, 3),
+    Specificity = round(specificity, 3),
+    AUC = round(pROC::auc(roc_obj), 3)
+  )
+}
+#Aggregate evaluation metrics for all trained models on the validation set
+results <- rbind(
+  get_metrics(linearSVM_02, "Linear SVM (2 features)"),
+  get_metrics(linearSVM_04, "Linear SVM (4 features)"),
+  get_metrics(linearSVM_all, "Linear SVM (All features)"),
+  get_metrics(tunelinearSVM_all, "Linear SVM (All + CV)"),
+  get_metrics(radialSVM_all, "Radial SVM (All features)"),
+  get_metrics(tune_radialSVM_all, "Radial SVM (All + CV)")
+)
+
+results #Display the comparative performance results
+
+#Compute ROC curves for each model using validation data and decision values
+roc_linear_02 <- roc(validation_data$stroke,
+                     attributes(predict(linearSVM_02, validation_data, decision.values=TRUE))$decision.values)
+
+roc_linear_04 <- roc(validation_data$stroke,
+                     attributes(predict(linearSVM_04, validation_data, decision.values=TRUE))$decision.values)
+
+roc_linear_all <- roc(validation_data$stroke,
+                      attributes(predict(linearSVM_all, validation_data, decision.values=TRUE))$decision.values)
+
+roc_linear_cv <- roc(validation_data$stroke,
+                     attributes(predict(tunelinearSVM_all, validation_data, decision.values=TRUE))$decision.values)
+
+roc_radial <- roc(validation_data$stroke,
+                  attributes(predict(radialSVM_all, validation_data, decision.values=TRUE))$decision.values)
+
+roc_radial_cv <- roc(validation_data$stroke,
+                     attributes(predict(tune_radialSVM_all, validation_data, decision.values=TRUE))$decision.values)
+
+#Plot ROC curves of all models on a single graph for visual performance comparison
+plot(roc_linear_02, col="blue", main="ROC Comparison – SVM Models")
+plot(roc_linear_04, col="green", add=TRUE)
+plot(roc_linear_all, col="orange", add=TRUE)
+plot(roc_linear_cv, col="black", add=TRUE)
+plot(roc_radial, col="purple", add=TRUE)
+plot(roc_radial_cv, col="red", add=TRUE)
+
+legend("bottomright",
+       legend=c("Linear 2F", "Linear 4F", "Linear All",
+                "Linear All + CV", "Radial All", "Radial All + CV"),
+       col=c("blue","green","orange","black","purple","red"),
+       lwd=2)
+```
+
+***Overall Conclusion for SVM ML Model***: While the Radial SVM boasts the highest accuracy, it is actually the most dangerous model to use because it misses nearly 76% of stroke cases. In medicine, a 'false alarm' is annoying, but a 'missed diagnosis' is fatal.
+
+We also looked past the 2-feature model. Even though it scored well, relying on only two numbers is too narrow for a complex disease. We need a model that looks at the 'whole picture', like blood pressure and BMI, so no one falls through the cracks.
+
+That is why the Linear SVM (All Features + CV) is our clear winner. With a Sensitivity of 0.94, it acts as a reliable safety net, catching almost every stroke victim. It’s the only model we tested that prioritizes patient safety over just looking good on paper.
+
+***Final Selected Model***: Linear SVM (All Features + Cross-Validation)
+**Sensitivity** = 0.94
+**AUC** = 0.868
+**Accuracy** = 0.713
+**Specificity** = 0.702
+
+
+#### Model 2 - Logistic Regression
+
+```{r}
+# Compute Class weight to handle imbalance in class
+wts <- ifelse(
+  train_data$stroke == "Stroke",
+  1 / sum(train_data$stroke == "Stroke"),
+  1 / sum(train_data$stroke == "NoStroke")
+)
+```
+
+```{r, echo=FALSE}
+# =========================================================
+# MODEL: Single-variable model (age)
+# =========================================================
+
+# A simple logistic regression model using only age as the predictor
+glm_age <- glm(stroke ~ age, data = train_data, family = "binomial", weights = wts)
+summary(glm_age)
+
+# Predicted probabilities for age grid
+age_grid <- seq(min(train_data$age), max(train_data$age))
+glm_age_pred <- predict(glm_age, newdata = data.frame(age = age_grid), type="response")
+
+# Plot predicted probability of stroke as a function of age
+plot(age_grid, glm_age_pred,
+     type="l",
+     xlab="Age",
+     ylab="Predicted probability of Stroke",
+     main = "stroke as a function of age")
+```
+
+**Observation:**
+The plot shows a monotonically increasing relationship between age and the predicted probability of stroke. As age increases, the model assigns a steadily higher stroke risk, indicating that age is a strong positive predictor of stroke even in a single-variable model.
+
+```{r, echo=FALSE}
+# =========================================================
+# MODEL: Full logistic regression (all variables)
+# =========================================================
+
+# A logistic regression model considering all variables
+glm_full <- glm(stroke ~ ., data = train_data, family = "binomial",weights = wts)
+summary(glm_full)
+
+# Predicted probabilities on training data
+train_probs <- predict(glm_full, type="response")
+
+# Confusion matrix at default threshold 0.5
+alpha <- 0.5
+train_pred <- ifelse(train_probs > alpha, "Stroke", "NoStroke") |> 
+  factor(levels = c("NoStroke","Stroke"))
+
+table(train_data$stroke, train_pred, dnn = c("Observed","Predicted"))
+
+```
+
+```{r, echo=FALSE}
+
+# Evaluate trained logistic regression model on the validation data
+val_probs <- predict(glm_full, newdata = validation_data, type="response")
+
+# Plot the ROC curve for this model
+roc_full_log_model <- roc(validation_data$stroke, val_probs, levels = c("NoStroke","Stroke"), direction = "<")
+plot(roc_full_log_model, main="ROC Curve - Logistic Regression Model (all variables)")
+pROC::auc(roc_full_log_model)
+```
+
+**Observation:**
+The full logistic regression model demonstrates good discriminative performance with an AUC of 0.869, an accuracy of 73.3%, and a sensitivity of 0.90. This indicates that the model successfully identifies most stroke cases, which is essential in a medical screening context. However, its specificity of 0.724 shows that a noticeable number of non-stroke patients are incorrectly classified as high risk. This trade-off is expected given the class imbalance and the emphasis on sensitivity.
+
+
+```{r, echo=FALSE}
+
+# Threshold adjustment for alpha value (trying a lower alpha value)
+alpha_val <- 0.3
+val_pred_low <- ifelse(val_probs > alpha_val, "Stroke", "NoStroke") |>
+  factor(levels = c("NoStroke","Stroke"))
+
+table(validation_data$stroke, val_pred_low, dnn=c("Observed","Predicted"))
+```
+
+
+```{r, echo=FALSE}
+# Ridge & Lasso Logistic Regression --------------------------------------
+# Model matrices for glmnet
+X_train <- model.matrix(stroke ~ ., data = train_data)[, -1]
+Y_train <- train_data$stroke
+
+X_val <- model.matrix(stroke ~ ., data = validation_data)[, -1]
+
+# Ensure same columns
+X_val <- X_val[, colnames(X_train)]
+Y_val <- validation_data$stroke
+```
+
+```{r, echo=FALSE}
+# =========================================================
+# MODEL: Ridge regression (alpha = 0)
+# =========================================================
+
+# Ridge regression using L2 regularization (alpha = 0) and 5-fold cross-validation
+cv_ridge <- cv.glmnet(X_train, Y_train, family="binomial", alpha=0, nfolds=5)
+
+# Plotting cross-validated deviance vs log(lambda)
+plot(cv_ridge)
+
+# Fit the final Ridge model using the optimal lambda selected by cross-validation
+ridge_obj <- glmnet(X_train, Y_train, lambda=cv_ridge$lambda.min, family="binomial", weights = wts)
+ridge_val_probs <- predict(ridge_obj, newx = X_val, type="response")[,1]
+
+# Compute ROC curve on the validation set
+roc_ridge <- roc(Y_val, ridge_val_probs, levels = c("NoStroke","Stroke"), direction = "<")
+plot(roc_ridge, main="ROC Curve - Ridge Regression")
+pROC::auc(roc_ridge)
+```
+
+**Observation:**
+Ridge Logistic Regression achieves an AUC of 0.870, sensitivity of 0.92, accuracy of 0.725, and specificity of 0.725.
+The ridge penalty stabilizes coefficient estimates by shrinking them without removing predictors, which improves generalization when medical variables are correlated and helps reduce missed stroke cases.
+
+```{r, echo=FALSE}
+# =========================================================
+# MODEL: Lasso regression (alpha = 1)
+# =========================================================
+
+# Lasso regression using L1 regularization (alpha = 1) and 5-fold cross-validation
+cv_lasso <- cv.glmnet(X_train, Y_train, family="binomial", alpha=1, nfolds=5)
+
+# Plotting cross-validated deviance vs log(lambda)
+plot(cv_lasso)
+
+# Fit the final lasso model using the optimal lambda selected by cross-validation
+lasso_obj <- glmnet(X_train, Y_train, lambda=cv_lasso$lambda.min, family="binomial", weights = wts)
+lasso_val_probs <- predict(lasso_obj, newx = X_val, type="response")[,1]
+
+# Compute ROC curve on the validation set
+roc_lasso <- roc(Y_val, lasso_val_probs, levels = c("NoStroke","Stroke"), direction = "<")
+plot(roc_lasso, main="ROC Curve - Lasso Regression")
+pROC::auc(roc_lasso)
+
+# Feature importance (Lasso) ---------------------------------------------
+lasso_coef <- coef(lasso_obj)
+coef_df <- data.frame(
+  Feature = rownames(lasso_coef),
+  Coefficient = as.numeric(lasso_coef)
+)
+coef_df <- coef_df[coef_df$Coefficient != 0, ]
+coef_df_no_intercept <- coef_df[coef_df$Feature != "(Intercept)", ]
+print(coef_df_no_intercept)
+```
+
+**Observation:**
+Lasso Logistic Regression performs comparably to Ridge, with an AUC of 0.870, accuracy of 0.725, and sensitivity of 0.92.
+It offers improved interpretability through automatic feature selection, hence providing a simpler, more interpretable model.
+
+```{r}
+# =========================================================
+# Compute metrics for all Logistic Regression Models
+# =========================================================
+
+get_metrics_log <- function(model, model_name, X_val, Y_val, type = c("glm", "glmnet")) {
+  
+  type <- match.arg(type)
+  
+  # 1. Generate predicted probabilities
+  if(type == "glm") {
+    probs <- predict(model, newdata = validation_data, type = "response")
+  } else if(type == "glmnet") {
+    probs <- predict(model, newx = as.matrix(X_val), type = "response")[,1]
+  }
+  
+  # 2. Predicted classes at 0.5 threshold
+  ypred <- ifelse(probs > 0.5, "Stroke", "NoStroke") |> 
+    factor(levels = c("NoStroke","Stroke"))
+  
+  # 3. Confusion matrix (force both levels)
+  cm <- table(ypred, factor(Y_val, levels = c("NoStroke","Stroke")))
+  
+  # 4. Accuracy
+  acc <- mean(ypred == Y_val)
+  
+  # 5. Sensitivity & Specificity
+  total_actual_strokes <- sum(Y_val == "Stroke")
+  total_actual_healthy <- sum(Y_val == "NoStroke")
+  
+  sensitivity <- cm["Stroke", "Stroke"] / total_actual_strokes
+  specificity <- cm["NoStroke", "NoStroke"] / total_actual_healthy
+  
+  # 6. ROC & AUC
+  roc_obj <- pROC::roc(Y_val, as.numeric(probs), levels = c("NoStroke", "Stroke"), direction = "<")
+  
+  # 7. Return metrics
+  data.frame(
+    Model = model_name,
+    Accuracy = round(acc, 3),
+    Sensitivity = round(sensitivity, 3),
+    Specificity = round(specificity, 3),
+    AUC = round(pROC::auc(roc_obj), 3)
+  )
+}
+
+# Aggregate results for all logistic regression models
+log_results <- rbind(
+  get_metrics_log(glm_full, "Full Logistic", NULL, validation_data$stroke, type = "glm"),
+  get_metrics_log(ridge_obj, "Ridge Logistic", X_val, validation_data$stroke, type = "glmnet"),
+  get_metrics_log(lasso_obj, "Lasso Logistic", X_val, validation_data$stroke, type = "glmnet")
+)
+
+log_results
+
+# Plot ROC curve for Full Logistic Regression
+plot(roc_full_log_model,
+     col = "blue",
+     lwd = 2,
+     main = "ROC Comparison – Logistic Regression Models")
+
+# Add Ridge Regression ROC
+plot(roc_ridge,
+     col = "green",
+     lwd = 2,
+     add = TRUE)
+
+# Add Lasso Regression ROC
+plot(roc_lasso,
+     col = "red",
+     lwd = 2,
+     add = TRUE)
+
+# Add legend
+legend("bottomright",
+       legend = c("Full Logistic", "Ridge Logistic", "Lasso Logistic"),
+       col = c("blue", "green", "red"),
+       lwd = 2)
+
+```
+
+**Observation:**
+Full logistic regression provides a strong baseline with good accuracy and AUC but slightly lower sensitivity.
+Ridge and Lasso Logistic Regression both improve stroke detection, achieving identical performance with 0.92 sensitivity and 0.87 AUC.
+Since both perform equally well, Lasso Logistic Regression is preferred because it produces a simpler and more interpretable model through feature selection.
+
+The ROC curves of the Logistic, Ridge, and Lasso models show nearly identical shapes and AUC values, suggesting that regularization does not substantially improve predictive performance but helps stabilize coefficient estimates.
+
+***Final Selected Model***: Lasso Regression
+**Sensitivity** = 0.92
+**AUC** = 0.870
+**Accuracy** = 0.725
+**Specificity** = 0.715
+
+
+#### Comparison between SVM and Logistic Regression
+
+```{r}
+# ---- Prediction wrapper for SVM ----
+predict_svm <- function(model, data) {
+  predict(model, newdata = data)
+}
+
+predict_svm_score <- function(model, data) {
+  attributes(
+    predict(model, data, decision.values = TRUE)
+  )$decision.values
+}
+
+# ---- Prediction wrapper for Lasso (glmnet) ----
+predict_lasso <- function(model, data, x_mat) {
+  probs <- predict(
+    model,
+    newx = x_mat,
+    type = "response"
+  )[, 1]
+  factor(ifelse(probs > 0.5, "Stroke", "NoStroke"), levels = c("NoStroke", "Stroke"))
+}
+
+predict_lasso_score <- function(model, x_mat) {
+  predict(
+    model,
+    newx = x_mat,
+    type = "response"
+  )[, 1]
+}
+
+##------Unified metric function-----
+get_metrics_general <- function(
+  model,
+  model_name,
+  model_type = c("svm", "lasso")
+) {
+  
+  model_type <- match.arg(model_type)
+  
+  eval_data <- validation_data 
+  
+  if (model_type == "svm") {
+    ypred <- predict_svm(model, eval_data)
+    scores <- predict_svm_score(model, eval_data)
+    
+  } else {
+    X_val_mat <- model.matrix(~ . - stroke, eval_data)[, -1]
+    ypred <- predict_lasso(model, eval_data, X_val_mat)
+    scores <- predict_lasso_score(model, X_val_mat)
+  }
+  
+  cm <- table(ypred, eval_data$stroke)
+  acc <- mean(ypred == eval_data$stroke)
+  
+  sensitivity <- ifelse("Stroke" %in% rownames(cm),
+                        cm["Stroke","Stroke"] / sum(eval_data$stroke == "Stroke"), NA)
+  
+  specificity <- ifelse("NoStroke" %in% rownames(cm),
+                        cm["NoStroke","NoStroke"] / sum(eval_data$stroke == "NoStroke"), NA)
+  
+  roc_obj <- roc(eval_data$stroke, as.numeric(scores))
+  
+  data.frame(
+    Model = model_name,
+    Accuracy = round(acc, 3),
+    Sensitivity = round(sensitivity, 3),
+    Specificity = round(specificity, 3),
+    AUC = round(pROC::auc(roc_obj), 3) # Using pROC:: to avoid library conflicts
+  )
+}
+
+##-----Final comparison table (SVM vs Lasso)-----
+results_compare <- rbind(
+  get_metrics_general(
+    tunelinearSVM_all,
+    "Linear SVM (All + CV)",
+    model_type = "svm"
+  ),
+  get_metrics_general(
+    lasso_obj,
+    "Lasso Logistic Regression",
+    model_type = "lasso"
+  )
+)
+
+results_compare
+
+##-----ROC comparison plot-----
+roc_svm <- roc(
+  validation_data$stroke,
+  predict_svm_score(tunelinearSVM_all, validation_data)
+)
+
+X_val_mat_plot <- model.matrix(~ . - stroke, validation_data)[, -1]
+roc_lasso <- roc(
+  validation_data$stroke,
+  predict_lasso_score(lasso_obj, X_val_mat_plot)
+)
+
+plot(roc_svm, col = "black", lwd = 2,
+     main = "ROC Comparison: SVM vs lasso")
+plot(roc_lasso, col = "blue", lwd = 2, add = TRUE)
+
+legend("bottomright",
+       legend = c("Linear SVM (All + CV)", "Lasso Logistic Regression"),
+       col = c("black", "blue"),
+       lwd = 2)
+
+```
+
+
+
+***Overall Conclusion***: 
+
+Both models show strong performance for stroke prediction, but they emphasize different clinical priorities. The Linear SVM (All Features + Cross-Validation) achieves the highest sensitivity (0.94), correctly identifying 94% of stroke cases. In a medical setting, this is especially important because failing to detect a true stroke patient can have serious consequences. Its AUC of 0.868 confirms good overall discriminative ability, although its accuracy (0.713) and specificity (0.702) are slightly lower.
+
+The Lasso Logistic Regression model provides a more balanced performance, with higher accuracy (0.725), sensitivity (0.92), better specificity (0.715), and a slightly higher AUC (0.870). It also offers improved interpretability through automatic feature selection, which is useful for explaining clinical risk factors.
+
+Overall, **Linear SVM (All + CV)** is selected as the best model when the primary objective is maximizing stroke detection and minimizing false negatives, making it the most suitable choice for medical screening applications.
+
+### Interpretable Machine Learning Model for SVM
+
+```{r}
+# Interpretability by Design
+
+final_model <- tunelinearSVM_all 
+final_model
+
+# Calculate weights for Linear SVM (w = sum of alpha_i * y_i * support_vectors)
+w <- t(final_model$coefs) %*% final_model$SV
+w <- as.vector(w)
+
+# Match names correctly
+# We need to recreate the design matrix to get the feature names
+X_names <- model.matrix(features_all, train_data)[, -1] 
+names(w) <- colnames(X_names)
+
+#This create feature-importance table from Linear SVM coefficients, where absolute weights represent the strength of each feature’s influence.
+svm_importance <- data.frame(
+  Feature = names(w),
+  Weight = w,
+  Importance = abs(w)
+)
+
+svm_importance <- svm_importance[order(-svm_importance$Importance), ]
+print(svm_importance)
+
+# --- Visualizing Feature Importance ---
+par(mar = c(10, 4, 4, 2))  # increase bottom margin
+
+barplot(
+  svm_importance$Importance,
+  names.arg = svm_importance$Feature,
+  las = 2,                 # rotate labels vertically
+  cex.names = 0.8,         # reduce font size
+  col = "steelblue",
+  main = "SVM Feature Importance (Weights)"
+)
+
+```
+
+**Observation:** The linear SVM allows direct interpretation of feature coefficients. **Age** is the most influential predictor, followed by work type and smoking status. Average glucose level also contributes positively to stroke risk. Features such as BMI, hypertension, and heart disease have smaller effects, while gender has minimal influence.
+
+```{r}
+#Post-hoc Model-Agnostic Interpretability
+
+#Separates predictor variables (X) from the target variable (y)
+X <- validation_data[, -which(names(train_data) == "stroke")] 
+y <- validation_data$stroke
+
+#Wraps the trained model into a black-box interface and allows interpretability methods to interact only via inputs and outputs using type = "prob" ensures explanations are based on predicted probabilities
+
+predictor <- Predictor$new(
+  model = final_model,
+  data  = X,
+  y     = y,
+  type  = "prob"
+)
+```
+
+```{r}
+#Compute Permutation Feature Importance (PFI) to quantify the global importance of each feature based on the increase in classification error when the feature is randomly permuted
+
+pfi <- FeatureImp$new(
+  predictor,
+  loss = "ce"
+)
+
+plot(pfi)
+
+```
+
+**Observation**: Permutation importance shows that shuffling age leads to the largest increase in prediction error, confirming it as the most important global feature. Work type and smoking status also significantly affect model performance. Glucose level has moderate importance, while BMI and gender contribute less. This validates the global importance ranking obtained from SVM coefficients.
+
+```{r}
+#Compute a Partial Dependence Plot (PDP) to visualize the average effect of age on stroke risk while marginalizing over all other features
+pdp_age <- FeatureEffect$new(
+  predictor,
+  feature = "age",
+  method  = "pdp"
+)
+
+plot(pdp_age)
+
+```
+
+**Observation**: The PDP reveals that stroke probability remains low at younger ages but increases sharply after around 55–60 years. This indicates a strong non-linear relationship between age and stroke risk. The steep rise at older ages highlights age as a threshold-based risk factor. The trend is consistent across both stroke and non-stroke classes.
+
+```{r}
+#Compute an Accumulated Local Effects (ALE) plot to estimate the effect of age on stroke risk while accounting for correlations with other features
+ale_age <- FeatureEffect$new(
+  predictor,
+  feature = "age",
+  method  = "ale"
+)
+
+plot(ale_age)
+
+```
+
+**Observation**: ALE confirms that age has little effect at younger values but strongly increases stroke risk beyond middle age. Unlike PDP, ALE accounts for correlations with other features, making the effect more reliable. The sharp increase after age 60 indicates a true local influence. This supports the robustness of age as a key predictor.
+
+```{r}
+#Compute SHAP values to explain an individual prediction by decomposing the model output into feature-level contributions
+x_interest <- X[1, ]
+
+shap <- Shapley$new(
+  predictor,
+  x.interest = x_interest
+)
+
+plot(shap)
+
+```
+
+**Observation**: SHAP explains an individual prediction by showing feature-level contributions. For the selected patient, age and high glucose level are the main drivers pushing the prediction toward stroke. Work type and smoking status also contribute positively. Features with small SHAP values have little impact on this individual’s risk.
+
+### Interpretable Machine Learning Model for Logistic Regression
+
+```{r}
+# Recreate test matrix like training matrix
+X_test_lasso <- model.matrix(stroke ~ ., data = validation_data)[, -1]
+
+# Numeric response for DALEX
+Y_test_num <- as.numeric(validation_data$stroke == "Stroke")
+
+# Custom prediction function
+predict_lasso <- function(model, newdata) {
+  newx <- as.matrix(newdata)
+  predict(
+    model,
+    newx = newx,
+    type = "response"
+  )[, 1]
+}
+
+# DALEX explainer
+explainer_lasso <- DALEX::explain(
+  model = lasso_obj,
+  data = X_test_lasso,
+  y = Y_test_num,
+  predict_function = predict_lasso,
+  main = "Lasso Logistic Regression",
+  verbose = FALSE
+)
+
+# Permutation Feature Importance
+pfi_lasso <- model_parts(explainer_lasso, type = "difference")
+
+# Visualize global feature importance
+plot(pfi_lasso)
+
+```
+
+**Observation:**
+The PFI plot shows that age is by far the most important predictor of stroke, with an importance around 0.36. Other features, including work type (self-employed, government job) and average glucose level, have much smaller contributions (all below 0.02), indicating that they are relatively less influential in predicting stroke in this dataset.
+
+```{r}
+# FEATURE EFFECTS ------------------------------------------------------------
+
+# Use the same features as in the model (exclude intercept and target)
+features_to_plot <- colnames(X_train)
+
+# Partial Dependence (PDP) and Accumulated Local Effects (ALE)
+pdp_list <- list()
+ale_list <- list()
+
+# Loop over each feature to compute PDP and ALE
+for(feat in features_to_plot){
+  
+  # PDP
+  pdp_obj <- model_profile(
+    explainer_lasso,
+    variables = feat,
+    type = "partial"
+  )
+  pdp_list[[feat]] <- plot(pdp_obj) +
+    ggtitle(paste("PDP:", feat)) +
+    theme_light()
+  
+  # ALE
+  ale_obj <- model_profile(
+    explainer_lasso,
+    variables = feat,
+    type = "accumulated"
+  )
+  # Center ALE around 0
+  ale_obj$agr_profiles$`_yhat_` <- ale_obj$agr_profiles$`_yhat_` - mean(ale_obj$agr_profiles$`_yhat_`)
+  ale_list[[feat]] <- plot(ale_obj) +
+    ggtitle(paste("ALE:", feat)) +
+    theme_light()
+}
+
+# Display PDP for first 3 features
+grid.arrange(grobs = pdp_list[1:3], ncol = 3)
+# Display ALE for first 3 features
+grid.arrange(grobs = ale_list[1:3], ncol = 3)
+```
+
+
+**Observation**: The similarity between PDP and ALE results for age suggests that this effect is robust and not driven by correlations with other features. Overall, these plots reinforce that age is the dominant driver of model predictions, while gender features are relatively less influential in predicting stroke in this data set.
+
+```{r}
+# LOCAL EXPLANATIONS (SHAP) -------------------------------------------------
+
+# Select a specific observation (e.g., first row in test set)
+obs_id <- 1
+# Ensure observation uses the same columns as X_train
+new_obs <- validation_data[obs_id, ] %>%
+  model.matrix(~ . - stroke, .) %>% 
+  .[, colnames(X_train), drop = FALSE]
+
+# SHAP explanation
+shap_obj <- predict_parts(
+  explainer_lasso,
+  new_observation = new_obs,
+  type = "shap",
+  B = 25
+)
+plot(shap_obj) +
+  ggtitle(paste("SHAP Explanation - Observation #", obs_id)) +
+  theme_light()
+```
+
+**Observation**
+For this specific patient age is the strongest factor increasing the predicted stroke risk, followed by average glucose level. Heart disease contributes only moderately to stroke risk, as well as smoking status and bmi. Some features, such as gender and being married, slightly decrease the predicted risk. This highlights how different features can push the prediction up or down for an individual.
+
+**Overall Interpretability Conclusion**
+
+1. Feature Importance: Internal weights and Permutation Importance (PFI) both confirmed that Age is the #1 risk factor, followed by glucose levels and job type.
+2. Global Effects: Our Partial Dependence (PDP) and ALE plots showed that stroke risk stays very low until age 55, then climbs sharply, a non-linear "threshold" doctors can easily recognize.
+3. Individual Logic: Using SHAP values, both Linear SVM and Lasso Logistic Regression identify age and high average glucose level as the main factors increasing stroke risk. Heart disease also contributes positively to stroke prediction.
+Features such as gender, work type, BMI, and smoking status have small or negligible effects for this individual.
+4. BMI, hypertension, and heart disease have weaker yet consistent effects.
+5. Gender and residence type show minimal influence on predictions.
